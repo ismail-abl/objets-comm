@@ -25,41 +25,67 @@ unsigned long lastBlinkTime = 0;
   @param rangingData Reference to UWB ranging data object
 */
 void rangingHandler(UWBRangingData &rangingData) {
-  Serial.print("GOT RANGING DATA - Type: ");
-  Serial.println(rangingData.measureType());
-  
+  // 1. Vérifier si c'est bien une mesure de type Two-Way Ranging
   if(rangingData.measureType() == (uint8_t)uwb::MeasurementType::TWO_WAY) {
     RangingMeasures twr = rangingData.twoWayRangingMeasure();
     
+    Serial.println("--- DEBUT CYCLE DE MESURE ---");
+    Serial.print("Nombre de cibles detectees : ");
+    Serial.println(rangingData.available());
+
     for(int j = 0; j < rangingData.available(); j++) {
+      // --- ZONE D'AFFICHAGE BRUT (DEBUG) ---
+      Serial.print("[RAW] Index: "); Serial.print(j);
+      
+      // Afficher le status (0 = OK, autre = Erreur)
+      Serial.print(" | Status: 0x"); 
+      Serial.print(twr[j].status, HEX); 
+      
+      // Afficher la distance brute même si elle est erronée (souvent 0xFFFF en cas d'erreur)
+      Serial.print(" | Dist Brute: "); 
+      Serial.print(twr[j].distance);
+      
+      // On affiche l'adresse MAC de la cible pour être sûr de qui on parle
+      Serial.print(" | Mac: ");
+      // Note: Selon la librairie, l'accès à l'adresse peut varier, 
+      // mais souvent twr[j].remote_addr ou similaire est disponible.
+      // Si cela cause une erreur de compilation, commentez la ligne suivante.
+      // Serial.print(twr[j].mac.toString()); 
+      
+      Serial.println(""); 
+      // -------------------------------------
+
+      // Votre logique originale (Le filtre)
       if(twr[j].status == 0 && twr[j].distance != 0xFFFF) {
-        Serial.print("Distance to base: ");
+        Serial.print(">> VALID: Distance to base: ");
         Serial.print(twr[j].distance);
         Serial.println(" cm");
         
-        // Determine LED behavior based on proximity zones
+        // ... (Le reste de votre logique LED reste ici inchangé) ...
         int newBlinkInterval;
         if(twr[j].distance > WORKSPACE_ACCESS_THRESHOLD) {
-          newBlinkInterval = 0;                                 // Outside workspace - LED off
-          Serial.println("Status: Outside workspace");
+           // ...
+           newBlinkInterval = 0;
         }
         else if(twr[j].distance <= EQUIPMENT_OPERATION_THRESHOLD) {
-          newBlinkInterval = 100;                               // Equipment zone - very fast blink
-          Serial.println("Status: Equipment operation zone");
+           // ...
+           newBlinkInterval = 100;
         }
-        else if(twr[j].distance <= WORKSPACE_ACCESS_THRESHOLD) {
-          newBlinkInterval = 500;                               // Workspace zone - slow blink
-          Serial.println("Status: Workspace access zone");
+        else { // WORKSPACE_ACCESS_THRESHOLD
+           newBlinkInterval = 500;
         }
         
-        // Apply debouncing
+        // Mise à jour LED
         if(newBlinkInterval != blinkInterval && (millis() - lastStateChange > DEBOUNCE_TIME)) {
           blinkInterval = newBlinkInterval;
           lastStateChange = millis();
           lastBlinkTime = millis();
         }
+      } else {
+        Serial.println(">> INVALID: Mesure rejetée (Mauvais status ou distance max)");
       }
     }
+    Serial.println("-----------------------------");
   }
 }
 
@@ -135,7 +161,6 @@ void loop() {
     if(currentTime - lastBlinkTime >= blinkInterval) {
       lastBlinkTime = currentTime;
       ledState = !ledState;
-      
       bool newPhysicalState = !ledState;
       if(newPhysicalState != lastLedPhysicalState) {
         digitalWrite(LED_PIN, newPhysicalState ? HIGH : LOW);
