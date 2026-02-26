@@ -1,46 +1,111 @@
-# Projet UWB : Contrôleur de Déplacement
+# Objets communicants – Projet UWB (Stella + Portenta)
+Automne 2025
 
-[![Arduino](https://img.shields.io/badge/Arduino-Portenta%20UWB%20Shield-blue?logo=arduino)](https://store.arduino.cc/products/portenta-uwb-shield) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+## Pour exécuter le projet :
 
-Implémentation simple d'un **protocole UWB** pour le cours **Objets Communiquants**. Utilise **1x Portenta UWB Shield** comme contrôleur (maître) et **2x Arduino Stella UWB** comme ancres fixes pour détecter les déplacements : **haut, bas, droite, gauche** via triangulation de distances [file:1][file:2].
+- ajouter dans l'IDE Arduino les librairies **StellaUWB**, **ArduinoBLE** et **PortentaUWBShield** ;
+- exécuter le script `post_install.sh` si cela n'a pas déjà été fait pour d'autres projets ;
+- choisir une adresse pour chaque appareil avant d’y téléverser le code (exemple : `0x11:0x11` et `0x12:0x12` pour les balises, `0x07:0x07` pour le contrôleur).
+- lancer uwb-joystick.py qui va lire sur le port série les mesures reportées par le Portenta et les interpréter en commandes de joystick
+- lancer pingpong.py qui va lancer le jeu de pong.
 
-Démo basique : Le Portenta mesure les distances aux deux Stellas et déduit la position/mouvement en 2D simplifiée.
+## Plan du projet
 
-## 🎯 Fonctionnalités
+- Analyse des besoins
+- Conception (plan en V)
+- Implémentation (code)
+- Tests unitaires
+- Validation
 
-- Mesure Two-Way Ranging (TWR) précise (~10cm) entre Portenta et Stellas.
-- Triangulation 1D/2D : Position relative via distances à deux ancres fixes (ex: espacées de 50cm).
-- Détection mouvements : 
-  - Droite/Gauche : Différence distances Stella A vs B.
-  - Haut/Bas : Évolution temporelle des moyennes (moyenne glissante sur 10 échantillons).
-- Feedback LED/Serial : Voyants verts/rouges pour proximité, debug distances en temps réel [file:1].
-- Adresses MAC fixes : Portenta `0x4142` (src), Stellas `0x1111` et `0x2222` (dst).
+**Rendu :**
 
-## 🛠 Matériel Requis
+- Fichiers source + cahier labo (Git)
+- Vidéo démo du projet
+- Présentation
 
-| Composant | Quantité | Rôle | Adresse MAC |
-|-----------|----------|------|-------------|
-| Portenta H7 + UWB Shield | 1 | Contrôleur mobile (main/tag) | `0x41,0x42` [file:1] |
-| Arduino Stella UWB | 2 | Ancres fixes (table) | Stella A: `0x11,0x11`<br>Stella B: `0x22,0x22` [file:2] |
+---
 
-- Distance max testée : ~2m (précision UWB optimale <1m).
-- Alim : USB pour tous.
+# Rapport de projet — Capture de mouvement UWB
 
-## 🚀 Installation
+## Contexte et objectif
 
-1. **Flasher les Stellas (ancres)** :
-   - Uploadez `sketch-stella-controller.ino` sur Stella A (ID `0x1111`) et Stella B (ID `0x2222`).
-   - Bibliothèque : `StellaUWB.h` (pré-installée Arduino IDE).
+- Développer une preuve de concept de capture / gestuelle courte portée en utilisant un **Portenta H7 + UWB Shield** comme contrôleur et **2 modules Stella UWB** comme balises.
+- Capacité visée : suivre le déplacement d’un objet (Portenta en main) entre deux balises.
+- Contraintes : faible latence (réactivité gestuelle), simplicité d’intégration (peu de calibration).
+- Les mesures de distance sont peu précises (entiers en cm avec un jitter important), mais suffisantes pour détecter des mouvements grossiers.
 
-2. **Flasher Portenta (contrôleur)** :
-   - Uploadez `sketch-portenta-controlee.ino` sur Portenta + Shield.
-   - Bibliothèque : `PortentaUWBShield.h`.
+À l’origine, nous voulions détecter des gestes par **occultation du signal UWB** (*passive sensing*), sans appareil dans la main et idéalement en **2D ou plus**. Cependant, la librairie du Portenta UWB Shield est encore incomplète : certaines fonctions avancées, comme l’accès au **RSSI**, ne sont pas exposées de manière stable. De plus, le support du **multicast** entre le contrôleur et plusieurs balises n’a été ajouté sur le dépôt Git de la librairie que deux semaines avant la date de rendu. Nous avons donc dû **réduire et adapter nos objectifs** en conséquence, pour nous concentrer sur un suivi de position **actif en 1D**.
 
-3. **Test** :
-   ```
-   Positionnez Stellas fixes (50cm apart).
-   Ouvrez Serial Monitor (115200 baud).
-   Déplacez Portenta : Observez distances et LEDs.
-   Exemple output :
-   Distance cm: 45.2 | Average: 48.1 | Mouvement: DROITE
-   ```
+## Matériel et réseau UWB
+
+- **Contrôleur** : Portenta H7 avec UWB Shield (rôle *Controller / Initiator* en multicast).
+- **Balises** : 2 × Stella UWB (rôle *Tag / Responder / Controlee*), adresses courtes exemplaires `0x11:0x11` et `0x12:0x12`, contrôleur `0x07:0x07`.
+- **Librairies** : `StellaUWB` et `PortentaUWBShield` qui implémentent la mesure de distance (TWR – Two Way Ranging) et la session contrôleur / balises (multicast).
+
+L'installation est la suivante : deux balises font office de référentiel spatial, fixées sur un support stable (table). Le Portenta est tenu en main et déplacé latéralement entre les deux balises.
+
+## Architecture logicielle
+
+- Les balises rejoignent une session multicast en tant que **responders** et publient les mesures de distance via Serial  
+  (`sketch-stella/sketch-stella.ino`).
+- Le contrôleur initie les échanges TWR et agrège les distances pour estimer la position relative (1D).  
+  Référence : `sketch-portenta-shield/sketch_nov27a/sketch_nov27a.ino`.
+- Handler de ranging : filtrage sur `status == 0` et distance valide (`!= 0xFFFF`), impression des distances en centimètres sur le port série (115200 bauds).
+
+---
+
+# Idée de scénario gestuel
+
+- Session UWB entre les deux Stella et le contrôleur.
+- Identification des deux Stella (gauche / droite).
+- Échantillonnage périodique des distances.
+- Buffer circulaire de plusieurs mesures pour lisser le signal.
+- À chaque nouveau point, comparaison avec les précédents pour détecter un mouvement.
+- Gestes envisagés : déplacement latéral (gauche / droite), en avant / arrière (proximité), arrêt.
+- Publication de la position estimée (gauche / milieu / droite) par l'interface série USB.
+- Un programme externe (Python / Processing) lit la position et lui associe une action.
+- Cette action est utilisée dans un petit jeu ou une interaction visuelle simple.
+
+---
+
+## Protocoles d’essai
+
+### 1. Actif (suivi de position 1D)
+
+- Disposer deux Stella de part et d’autre (gauche / droite).
+- Tenir le Portenta et le déplacer sur l’axe latéral.
+- Observer en série la variation des deux distances pour classer la position (gauche / milieu / droite) et détecter une trajectoire (geste).
+
+### Résumé pratique des tests
+
+1. **Test actif** : déplacer le Portenta de gauche à droite devant les Stella → observer les distances et la trajectoire estimée (geste).
+
+---
+
+## Implémentation actuelle
+
+- Code balise (Stella) : session multicast, callback de ranging, logs des distances.
+- Code contrôleur (Portenta) : initialisation UWB Shield, démarrage de la session multicast, réception des mesures, filtrage et affichage.
+- Mesures disponibles : distance (cm) à chaque échange TWR.
+
+## Résultats et observations
+
+- Les distances lues en série sont **cohérentes pour des trajectoires lentes** lorsque `status == 0` (TWR valide).
+- Le **jitter** est significatif (quelques centimètres) mais reste suffisant pour distinguer clairement trois zones : proche de la balise gauche, au milieu, proche de la balise droite.
+- Le scénario **actif 1D** permet donc de :
+  - détecter un déplacement gauche → droite ou droite → gauche ;
+  - estimer une position qualitative (gauche / milieu / droite) en temps réel.
+
+## Limites et risques
+
+- Géométrie 2D / 3D non résolue : la configuration actuelle est principalement 1D (entre deux balises).
+- Sensibilité au placement et à l’orientation des antennes ; multi-trajets possibles en environnement indoor.
+- Jitter important à courte distance, nécessitant un filtrage et une hystérésis pour éviter les faux changements d’état.
+- Gestion des adresses et des sessions à renforcer (éviter les collisions en cas de plusieurs sessions UWB voisines).
+
+## Prochaines étapes
+
+- Ajouter, si la librairie le permet dans une future version, l’affichage de `rx_power` dans le handler côté contrôleur et calibrer automatiquement un seuil (moyenne glissante « à vide »).
+- Implémenter une classification simple (gauche / milieu / droite) avec hystérésis pour lisser le bruit, puis publier la position sur Serial et éventuellement sur BLE.
+- Logger un jeu de données court (distance + timestamp, et RSSI si disponible) pour documenter précision et robustesse.
+- Intégrer la position dans un petit jeu ou une visualisation interactive (Python / Processing) pour la vidéo démo et la présentation, en mettant en avant le scénario actif de suivi 1D.
